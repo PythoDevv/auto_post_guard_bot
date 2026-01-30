@@ -1,0 +1,7 @@
+aiogram>=3.0.0
+sqlalchemy
+aiosqlite
+apscheduler
+pandas
+openpyxl
+python-dotenv
