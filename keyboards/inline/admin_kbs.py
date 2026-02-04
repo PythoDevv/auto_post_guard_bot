@@ -3,21 +3,13 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from config import ADMINS
 
-def groups_keyboard(groups, user_id=None):
+def groups_keyboard(groups, show_admin_btn=False):
     builder = InlineKeyboardBuilder()
     for group in groups:
         builder.button(text=group.title, callback_data=f"group_{group.id}")
     
-    # Add Admin Management button if user is in env ADMINS (Supreme Admin)
-    # We could also check DB admin here, but typically only SuperAdmin manages other admins
-    # Logic updated: let handler decide permission, show button? 
-    # Or keep hiding it for non-admin DB users? 
-    # Provided instructions imply 'Admin Management' is for admins.
-    # User said "not only admins user bot. All users can add their group".
-    # This implies the BUTTON "Admin Management" should probably remain reserved or be for "My Profile"?
-    # The user asked "what not admin buttons for show how many channels".
-    # We added stats to text.
-    if user_id and user_id in ADMINS:
+    # Add Admin Management button if permission granted
+    if show_admin_btn:
          builder.button(text="Admin boshqaruvi", callback_data="admin_management")
          
     builder.button(text="➕ Kanal/Guruh qo'shish", callback_data="manual_add_channel")
@@ -25,16 +17,27 @@ def groups_keyboard(groups, user_id=None):
     builder.adjust(1)
     return builder.as_markup()
 
+def skip_keyboard():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="O'tkazib yuborish", callback_data="skip_schedule")
+    return builder.as_markup()
+
 def group_main_menu_keyboard(group_id):
     builder = InlineKeyboardBuilder()
     builder.button(text="Post qo'shish", callback_data=f"add_post_{group_id}")
-    builder.button(text="Jadval qo'shish", callback_data=f"add_schedule_{group_id}")
-    builder.button(text="Kalit so'z qo'shish", callback_data=f"add_keyword_{group_id}")
+    # builder.button(text="Jadval qo'shish", callback_data=f"add_schedule_{group_id}") # Removed per user request
+    # builder.button(text="Kalit so'z qo'shish", callback_data=f"add_keyword_{group_id}") # Removed
     builder.button(text="Postlarni ko'rish", callback_data=f"view_posts_{group_id}")
     builder.button(text="Jadvalni ko'rish", callback_data=f"view_schedules_{group_id}")
-    builder.button(text="Kalit so'zlarni ko'rish", callback_data=f"view_keywords_{group_id}")
+    # builder.button(text="Kalit so'zlarni ko'rish", callback_data=f"view_keywords_{group_id}") # Removed
     builder.button(text="Guruhlarga qaytish", callback_data="back_to_groups")
     builder.adjust(2)
+    return builder.as_markup()
+
+def recurring_options_keyboard():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Bir martalik", callback_data="schedule_once")
+    builder.button(text="Doimiy (Har kuni)", callback_data="schedule_daily")
     return builder.as_markup()
 
 def cancel_keyboard():

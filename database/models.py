@@ -35,6 +35,7 @@ class Post(Base):
     file_id = Column(String, nullable=True)
     caption = Column(Text, nullable=True)
     text = Column(Text, nullable=True)
+    entities = Column(Text, nullable=True) # JSON stored as text
 
     group = relationship("Group", back_populates="posts")
 
@@ -42,6 +43,7 @@ class ScheduleTimes(Base):
     __tablename__ = 'schedule_times'
     id = Column(Integer, primary_key=True)
     group_id = Column(Integer, ForeignKey('groups.id'))
+    post_id = Column(Integer, ForeignKey('posts.id'), nullable=True) # Link to specific post
     time = Column(String) # Format: "HH:MM"
     is_recurring = Column(Integer, default=1) # 1: Daily, 0: One-time
 

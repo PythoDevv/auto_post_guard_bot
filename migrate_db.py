@@ -1,20 +1,24 @@
 import asyncio
-import asyncpg
-from config import DATABASE_URL
+from sqlalchemy import text
+from database.engine import engine
 
 async def migrate():
-    # Parse the URL manually or assume standard format for asyncpg
-    # postgresql+asyncpg://user:pass@host:port/dbname
-    conn_url = DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
-    
-    conn = await asyncpg.connect(conn_url)
     try:
-        await conn.execute("ALTER TABLE groups ADD COLUMN IF NOT EXISTS is_channel INTEGER DEFAULT 0;")
-        print("Successfully added is_channel column.")
+        async with engine.begin() as conn:
+            # Add is_channel to groups
+            await conn.execute(text("ALTER TABLE groups ADD COLUMN IF NOT EXISTS is_channel INTEGER DEFAULT 0;"))
+            
+            # Add post_id to schedule_times
+            await conn.execute(text("ALTER TABLE schedule_times ADD COLUMN IF NOT EXISTS post_id INTEGER REFERENCES posts(id) ON DELETE CASCADE;"))
+            
+            # Add entities to posts
+            await conn.execute(text("ALTER TABLE posts ADD COLUMN IF NOT EXISTS entities TEXT;"))
+            
+        print("Migration successful!")
     except Exception as e:
         print(f"Migration failed: {e}")
     finally:
-        await conn.close()
+        await engine.dispose()
 
 if __name__ == "__main__":
     asyncio.run(migrate())

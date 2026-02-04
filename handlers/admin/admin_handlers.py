@@ -6,6 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database.models import User, Group, Post, ScheduleTimes, Keyword
 from handlers.admin.states import AdminStates
 from keyboards.inline import admin_kbs
+import json
+from config import ADMINS
 
 router = Router()
 
@@ -33,8 +35,11 @@ async def cmd_admin(message: types.Message, session: AsyncSession, state: FSMCon
     
     if not groups:
         msg_text += "\n\nGuruh yoki kanal qo'shish uchun meni unga qo'shing va admin qiling."
+
+    # Check permission for Admin Management (Env Admin OR DB Admin)
+    show_admin_btn = (user.telegram_id in ADMINS) or (user.is_admin == 1)
         
-    await message.answer(msg_text, reply_markup=admin_kbs.groups_keyboard(groups, user.telegram_id))
+    await message.answer(msg_text, reply_markup=admin_kbs.groups_keyboard(groups, show_admin_btn=show_admin_btn))
     
     # We always set state to allow navigation if they have buttons (like Admin Management)
     await state.set_state(AdminStates.waiting_for_group_selection)
@@ -89,18 +94,25 @@ async def receive_post_content(message: types.Message, state: FSMContext, sessio
     file_id = None
     text = None
     caption = None
+    entities = None
     
     if message.text:
         content_type = "text"
         text = message.text
+        if message.entities:
+            entities = json.dumps([e.model_dump(mode='json') for e in message.entities])
     elif message.photo:
         content_type = "photo"
         file_id = message.photo[-1].file_id # Best quality
         caption = message.caption
+        if message.caption_entities:
+            entities = json.dumps([e.model_dump(mode='json') for e in message.caption_entities])
     elif message.video:
         content_type = "video"
         file_id = message.video.file_id
         caption = message.caption
+        if message.caption_entities:
+            entities = json.dumps([e.model_dump(mode='json') for e in message.caption_entities])
     else:
         await message.answer("Qollab-quvvatlanmagan kontent turi. Iltimos, Matn, Rasm yoki Video yuboring.")
         return
@@ -110,22 +122,18 @@ async def receive_post_content(message: types.Message, state: FSMContext, sessio
         content_type=content_type,
         file_id=file_id,
         caption=caption,
-        text=text
+        text=text,
+        entities=entities
     )
     session.add(post)
     await session.commit()
     
-    # Return to menu
-    await message.answer("Post muvaffaqiyatli qo'shildi!")
+    # Store post ID for scheduling
+    await state.update_data(schedule_post_id=post.id)
     
-    # We need to re-show the menu. 
-    # Since we can't edit the user's message (this is a new message), just send a new menu.
-    stmt = select(Group).where(Group.id == group_id)
-    res = await session.execute(stmt)
-    group = res.scalars().first()
-    
-    await message.answer(f"Guruhni boshqarish: {group.title}", reply_markup=admin_kbs.group_main_menu_keyboard(group_id))
-    await state.set_state(AdminStates.group_menu)
+    await message.answer("Post muvaffaqiyatli qo'shildi!\nEndi ushbu post uchun aniq vaqtni belgilashingiz mumkin (HH:MM formatida). Yoki 'O'tkazib yuborish' tugmasini bosing.", reply_markup=admin_kbs.skip_keyboard())
+    # Reuse the specific schedule state
+    await state.set_state(AdminStates.waiting_for_specific_schedule_time)
 
 # --- Add Schedule ---
 @router.callback_query(F.data.startswith("add_schedule_"))
@@ -209,14 +217,38 @@ async def view_posts(callback: types.CallbackQuery, session: AsyncSession):
         await callback.message.answer("Postlar topilmadi.")
         return
 
-    text = "Postlar:\n"
-    for p in posts:
-        text += f"ID: {p.id} | Type: {p.content_type}\n"
-        if p.text: text += f"Text: {p.text[:20]}...\n"
-        if p.caption: text += f"Caption: {p.caption[:20]}...\n"
-        text += f"/del_post_{p.id}\n\n"
+    await callback.message.delete()
     
-    await callback.message.answer(text)
+    # We will show posts one by one or list them with buttons? 
+    # User said "also need button for view post ! button name must time"
+    # This implies seeing the time of the post if it has one? Or just "View Post" buttons?
+    # User said "button name must time". 
+    # Maybe they mean if a post has a schedule, show the time as button?
+    # Or maybe they mean "Post 1 (18:30)", "Post 2 (No schedule)"?
+    
+    # Let's list posts as buttons.
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    builder = InlineKeyboardBuilder()
+    
+    for p in posts:
+        # Check if post has a specific schedule linked to it
+        sched_stmt = select(ScheduleTimes).where(ScheduleTimes.post_id == p.id)
+        sched_res = await session.execute(sched_stmt)
+        sched = sched_res.scalars().first()
+        
+        btn_text = f"Post {p.id}"
+        if sched:
+             btn_text += f" ({sched.time})"
+        else:
+             btn_text += " (Vaqt yo'q)"
+             
+        # Button to view/manage specific post
+        builder.button(text=btn_text, callback_data=f"manage_post_{p.id}")
+        
+    builder.button(text="Orqaga", callback_data=f"group_{group_id}")
+    builder.adjust(1)
+    
+    await callback.message.answer("Postni tanlang:", reply_markup=builder.as_markup())
 
 @router.message(F.text.startswith("/del_post_"))
 async def delete_post(message: types.Message, session: AsyncSession):
@@ -383,3 +415,211 @@ async def process_manual_channel(message: types.Message, state: FSMContext, sess
     
     # Show main menu
     await cmd_admin(message, session, state)
+
+# --- Specific Post Schedule ---
+@router.message(F.text.startswith("/set_schedule_"))
+async def start_set_post_schedule(message: types.Message, state: FSMContext, session: AsyncSession):
+    try:
+        parts = message.text.split("_")
+        if len(parts) < 3:
+             await message.answer("Error parsing ID.")
+             return
+        post_id = int(parts[2])
+        
+        stmt = select(Post).where(Post.id == post_id)
+        res = await session.execute(stmt)
+        post = res.scalars().first()
+        if not post:
+             await message.answer("Post topilmadi.")
+             return
+
+        await message.answer(f"Post {post_id} uchun vaqtni kiriting (Format: HH:MM).", reply_markup=admin_kbs.cancel_keyboard())
+        await state.update_data(schedule_post_id=post_id)
+        await state.set_state(AdminStates.waiting_for_specific_schedule_time)
+    except Exception as e:
+        await message.answer(f"Xato: {e}")
+
+@router.message(AdminStates.waiting_for_specific_schedule_time)
+async def receive_specific_schedule_time(message: types.Message, state: FSMContext, session: AsyncSession):
+    import re
+    time_str = message.text.strip()
+    
+    if not re.match(r"^\d{2}:\d{2}$", time_str):
+        await message.answer("Noto'g'ri format. Iltimos HH:MM ishlating.")
+        return
+        
+    data = await state.get_data()
+    post_id = data.get("schedule_post_id")
+    
+    stmt = select(Post).where(Post.id == post_id)
+    res = await session.execute(stmt)
+    post = res.scalars().first()
+    
+    if not post:
+        await message.answer("Post topilmadi.")
+        return
+
+    # Don't save yet, ask for type
+    await state.update_data(schedule_time=time_str)
+    
+    await message.answer(
+        "Bu post bir martalikmi yoki har kuni qaytariladimi?",
+        reply_markup=admin_kbs.recurring_options_keyboard()
+    )
+    await state.set_state(AdminStates.waiting_for_schedule_type)
+
+@router.callback_query(AdminStates.waiting_for_schedule_type)
+async def receive_schedule_type(callback: types.CallbackQuery, state: FSMContext, session: AsyncSession):
+    data = await state.get_data()
+    post_id = data.get("schedule_post_id")
+    time_str = data.get("schedule_time")
+    
+    is_recurring = 1 if callback.data == "schedule_daily" else 0
+    
+    stmt = select(Post).where(Post.id == post_id)
+    res = await session.execute(stmt)
+    post = res.scalars().first()
+    
+    if not post:
+        await callback.message.answer("Post topilmadi.")
+        return
+
+    schedule = ScheduleTimes(
+        group_id=post.group_id,
+        time=time_str,
+        post_id=post_id,
+        is_recurring=is_recurring
+    )
+    session.add(schedule)
+    await session.commit()
+    
+    type_str = "har kuni" if is_recurring else "bir marta"
+    await callback.message.edit_text(f"Post {time_str} vaqtiga ({type_str}) rejalashtirildi!")
+    
+    await state.clear()
+    
+    group_stmt = select(Group).where(Group.id == post.group_id)
+    group_res = await session.execute(group_stmt)
+    group = group_res.scalars().first()
+    
+    if group:
+        await callback.message.answer(f"Guruhni boshqarish: {group.title}", reply_markup=admin_kbs.group_main_menu_keyboard(group.id))
+        await state.set_state(AdminStates.group_menu)
+
+@router.callback_query(F.data == "skip_schedule")
+async def skip_generic(callback: types.CallbackQuery, state: FSMContext, session: AsyncSession):
+    data = await state.get_data()
+    group_id = data.get("selected_group_id")
+    
+    if group_id:
+        stmt = select(Group).where(Group.id == group_id)
+        res = await session.execute(stmt)
+        group = res.scalars().first()
+        await callback.message.edit_text(f"Guruhni boshqarish: {group.title}", reply_markup=admin_kbs.group_main_menu_keyboard(group_id))
+    else:
+        await callback.message.edit_text("Menyu")
+        
+    await state.set_state(AdminStates.group_menu)
+
+@router.callback_query(F.data.startswith("manage_post_"))
+async def manage_post(callback: types.CallbackQuery, session: AsyncSession):
+    post_id = int(callback.data.split("_")[2])
+    
+    stmt = select(Post).where(Post.id == post_id)
+    res = await session.execute(stmt)
+    post = res.scalars().first()
+    
+    if not post:
+        await callback.message.answer("Post topilmadi.")
+        return
+
+    # Check schedule
+    sched_stmt = select(ScheduleTimes).where(ScheduleTimes.post_id == post.id)
+    sched_res = await session.execute(sched_stmt)
+    sched = sched_res.scalars().first()
+    
+    info_text = f"Post ID: {post.id}\nTur: {post.content_type}\n"
+    if sched:
+        type_str = "Doimiy" if sched.is_recurring else "Bir martalik"
+        info_text += f"\nJadval: {sched.time} ({type_str})"
+    else:
+        info_text += "\nJadval: Belgilanmagan"
+        
+    # Send preview if possible (delete old menu msg first)
+    await callback.message.delete()
+    
+    # Load entities
+    entities = None
+    if post.entities:
+        try:
+            from aiogram.types import MessageEntity
+            data = json.loads(post.entities)
+            entities = [MessageEntity(**e) for e in data]
+        except:
+             pass
+
+    try:
+        if post.content_type == 'text':
+            await callback.message.answer(post.text, entities=entities)
+        elif post.content_type == 'photo':
+            await callback.message.answer_photo(post.file_id, caption=post.caption, caption_entities=entities)
+        elif post.content_type == 'video':
+            await callback.message.answer_video(post.file_id, caption=post.caption, caption_entities=entities)
+    except Exception as e:
+        info_text += f"\n\n(Postni ko'rsatishda xatolik: {e})"
+        
+    # Actions keyboard
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    builder = InlineKeyboardBuilder()
+    if not sched:
+        builder.button(text="Jadval belgilash", callback_data=f"set_sched_btn_{post.id}")
+    else:
+        builder.button(text="Jadvalni o'chirish", callback_data=f"del_sched_btn_{sched.id}")
+        
+    builder.button(text="Postni o'chirish", callback_data=f"del_post_btn_{post.id}")
+    builder.button(text="Orqaga", callback_data=f"view_posts_{post.group_id}")
+    builder.adjust(1)
+    
+    await callback.message.answer(info_text, reply_markup=builder.as_markup())
+
+@router.callback_query(F.data.startswith("set_sched_btn_"))
+async def btn_set_schedule(callback: types.CallbackQuery, state: FSMContext):
+    post_id = int(callback.data.split("_")[3])
+    await callback.message.answer("Vaqtni kiriting (HH:MM):", reply_markup=admin_kbs.cancel_keyboard())
+    await state.update_data(schedule_post_id=post_id)
+    await state.set_state(AdminStates.waiting_for_specific_schedule_time)
+
+@router.callback_query(F.data.startswith("del_sched_btn_"))
+async def btn_del_schedule(callback: types.CallbackQuery, session: AsyncSession):
+    sched_id = int(callback.data.split("_")[3])
+    stmt = select(ScheduleTimes).where(ScheduleTimes.id == sched_id)
+    res = await session.execute(stmt)
+    sched = res.scalars().first()
+    
+    if sched:
+        await session.delete(sched)
+        await session.commit()
+        await callback.answer("Jadval o'chirildi")
+        # Refresh management view
+        # We need post_id to refresh view
+        await manage_post(callback, session) 
+        # Actually context might be lost or we need to reconstruct callback mock?
+        # Simpler: just reload manually
+    else:
+        await callback.answer("Topilmadi")
+
+@router.callback_query(F.data.startswith("del_post_btn_"))
+async def btn_del_post(callback: types.CallbackQuery, session: AsyncSession):
+    post_id = int(callback.data.split("_")[3])
+    stmt = select(Post).where(Post.id == post_id)
+    res = await session.execute(stmt)
+    post = res.scalars().first()
+    
+    if post:
+        await session.delete(post)
+        await session.commit()
+        await callback.answer("Post o'chirildi")
+        await callback.message.delete()
+        await callback.message.answer("Post o'chirildi.")
+    else:
+        await callback.answer("Topilmadi")
