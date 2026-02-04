@@ -1,26 +1,57 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-def groups_keyboard(groups):
+from config import ADMINS
+
+def groups_keyboard(groups, user_id=None):
     builder = InlineKeyboardBuilder()
     for group in groups:
         builder.button(text=group.title, callback_data=f"group_{group.id}")
+    
+    # Add Admin Management button if user is in env ADMINS (Supreme Admin)
+    # We could also check DB admin here, but typically only SuperAdmin manages other admins
+    # Logic updated: let handler decide permission, show button? 
+    # Or keep hiding it for non-admin DB users? 
+    # Provided instructions imply 'Admin Management' is for admins.
+    # User said "not only admins user bot. All users can add their group".
+    # This implies the BUTTON "Admin Management" should probably remain reserved or be for "My Profile"?
+    # The user asked "what not admin buttons for show how many channels".
+    # We added stats to text.
+    if user_id and user_id in ADMINS:
+         builder.button(text="Admin boshqaruvi", callback_data="admin_management")
+         
+    builder.button(text="➕ Kanal/Guruh qo'shish", callback_data="manual_add_channel")
+
     builder.adjust(1)
     return builder.as_markup()
 
 def group_main_menu_keyboard(group_id):
     builder = InlineKeyboardBuilder()
-    builder.button(text="Add Post", callback_data=f"add_post_{group_id}")
-    builder.button(text="Add Schedule", callback_data=f"add_schedule_{group_id}")
-    builder.button(text="Add Keyword", callback_data=f"add_keyword_{group_id}")
-    builder.button(text="View Posts", callback_data=f"view_posts_{group_id}")
-    builder.button(text="View Schedule", callback_data=f"view_schedules_{group_id}")
-    builder.button(text="View Keywords", callback_data=f"view_keywords_{group_id}")
-    builder.button(text="Back to Groups", callback_data="back_to_groups")
+    builder.button(text="Post qo'shish", callback_data=f"add_post_{group_id}")
+    builder.button(text="Jadval qo'shish", callback_data=f"add_schedule_{group_id}")
+    builder.button(text="Kalit so'z qo'shish", callback_data=f"add_keyword_{group_id}")
+    builder.button(text="Postlarni ko'rish", callback_data=f"view_posts_{group_id}")
+    builder.button(text="Jadvalni ko'rish", callback_data=f"view_schedules_{group_id}")
+    builder.button(text="Kalit so'zlarni ko'rish", callback_data=f"view_keywords_{group_id}")
+    builder.button(text="Guruhlarga qaytish", callback_data="back_to_groups")
     builder.adjust(2)
     return builder.as_markup()
 
 def cancel_keyboard():
     builder = InlineKeyboardBuilder()
-    builder.button(text="Cancel", callback_data="cancel_action")
+    builder.button(text="Bekor qilish", callback_data="cancel_action")
+    return builder.as_markup()
+
+def admin_management_keyboard():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Adminlar ro'yxati", callback_data="list_admins")
+    builder.button(text="Admin qo'shish", callback_data="add_admin")
+    builder.button(text="Admin o'chirish", callback_data="remove_admin")
+    # Back to home/main admin menu if we have one, or just close
+    # For now no 'back' to main menu since main menu is context sensitive (groups)
+    return builder.as_markup()
+
+def back_to_admin_management():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Orqaga", callback_data="admin_management")
     return builder.as_markup()

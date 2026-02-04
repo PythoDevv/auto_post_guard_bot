@@ -18,6 +18,7 @@ class Group(Base):
     id = Column(Integer, primary_key=True)
     telegram_id = Column(BigInteger, unique=True, nullable=False)
     title = Column(String)
+    is_channel = Column(Integer, default=0)
     owner_id = Column(Integer, ForeignKey('users.id'))
     next_post_index = Column(Integer, default=0)
 
@@ -42,6 +43,7 @@ class ScheduleTimes(Base):
     id = Column(Integer, primary_key=True)
     group_id = Column(Integer, ForeignKey('groups.id'))
     time = Column(String) # Format: "HH:MM"
+    is_recurring = Column(Integer, default=1) # 1: Daily, 0: One-time
 
     group = relationship("Group", back_populates="schedule_times")
 

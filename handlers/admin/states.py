@@ -10,6 +10,12 @@ class AdminStates(StatesGroup):
     
     # Schedule management
     waiting_for_time = State()
+    waiting_for_schedule_type = State()
     
     # Keyword management
     waiting_for_keyword = State()
+    waiting_for_channel_id = State()
+
+    # Admin management
+    waiting_for_new_admin_id = State()
+    waiting_for_remove_admin_id = State()

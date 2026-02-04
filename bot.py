@@ -43,6 +43,9 @@ async def main():
     # Scheduler
     setup_scheduler(bot)
 
+    # Delete webhook to run polling
+    await bot.delete_webhook(drop_pending_updates=True)
+
     # Startup Notification
     await on_startup_notify(bot)
 

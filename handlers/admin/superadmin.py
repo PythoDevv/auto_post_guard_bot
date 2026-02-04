@@ -19,7 +19,7 @@ async def cmd_broadcast(message: types.Message, session: AsyncSession):
 
     text = message.text.replace("/broadcast", "").strip()
     if not text:
-        await message.answer("Usage: /broadcast <message>")
+        await message.answer("Foydalanish: /broadcast <xabar>")
         return
 
     stmt = select(User)
@@ -34,7 +34,7 @@ async def cmd_broadcast(message: types.Message, session: AsyncSession):
         except Exception as e:
             print(f"Failed to send to {user.telegram_id}: {e}")
             
-    await message.answer(f"Broadcast complete. Sent to {count} users.")
+    await message.answer(f"Xabar yuborish tugadi. {count} foydalanuvchilarga yuborildi.")
 
 
 @router.message(Command("export"))
@@ -42,17 +42,17 @@ async def cmd_export(message: types.Message, session: AsyncSession):
     if not is_superadmin(message.from_user.id):
         return
 
-    await message.answer("Generating export...")
+    await message.answer("Eksport qilinmoqda...")
     
     stmt = select(User)
     res = await session.execute(stmt)
     users = res.scalars().all()
     
     if not users:
-        await message.answer("No users found.")
+        await message.answer("Foydalanuvchilar topilmadi.")
         return
 
     file_io = export_users_to_excel(users)
     file = types.BufferedInputFile(file_io.read(), filename="users.xlsx")
     
-    await message.answer_document(file, caption="User export")
+    await message.answer_document(file, caption="Foydalanuvchilar eksporti")

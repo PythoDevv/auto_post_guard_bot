@@ -17,7 +17,7 @@ async def cmd_admin(message: types.Message, session: AsyncSession, state: FSMCon
     user = user_res.scalars().first()
     
     if not user:
-        await message.answer("Please start the bot first with /start")
+        await message.answer("Iltimos, avval botni /start buyrug'i bilan ishga tushiring")
         return
 
     # Fetch groups owned by user
@@ -25,11 +25,18 @@ async def cmd_admin(message: types.Message, session: AsyncSession, state: FSMCon
     result = await session.execute(stmt)
     groups = result.scalars().all()
     
+    # If no groups, still show the user a message but maybe with a help button or just stats
+    group_count = len([g for g in groups if g.is_channel == 0])
+    channel_count = len([g for g in groups if g.is_channel == 1])
+    
+    msg_text = f"Sizda {group_count} ta guruh va {channel_count} ta kanal mavjud."
+    
     if not groups:
-        await message.answer("You don't have any connected groups. Add me to a group and promote me to admin first.")
-        return
+        msg_text += "\n\nGuruh yoki kanal qo'shish uchun meni unga qo'shing va admin qiling."
         
-    await message.answer("Select a group to manage:", reply_markup=admin_kbs.groups_keyboard(groups))
+    await message.answer(msg_text, reply_markup=admin_kbs.groups_keyboard(groups, user.telegram_id))
+    
+    # We always set state to allow navigation if they have buttons (like Admin Management)
     await state.set_state(AdminStates.waiting_for_group_selection)
 
 @router.callback_query(F.data == "back_to_groups")
@@ -43,7 +50,7 @@ async def back_to_groups_callback(callback: types.CallbackQuery, session: AsyncS
     result = await session.execute(stmt)
     groups = result.scalars().all()
     
-    await callback.message.edit_text("Select a group to manage:", reply_markup=admin_kbs.groups_keyboard(groups))
+    await callback.message.edit_text("Boshqarish uchun guruhni tanlang:", reply_markup=admin_kbs.groups_keyboard(groups))
     await state.set_state(AdminStates.waiting_for_group_selection)
 
 @router.callback_query(F.data.startswith("group_"))
@@ -61,16 +68,16 @@ async def group_selected(callback: types.CallbackQuery, state: FSMContext, sessi
     group = res.scalars().first()
     
     if not group:
-        await callback.answer("Group not found.")
+        await callback.answer("Guruh topilmadi.")
         return
 
-    await callback.message.edit_text(f"Managing Group: {group.title}", reply_markup=admin_kbs.group_main_menu_keyboard(group_id))
+    await callback.message.edit_text(f"Guruhni boshqarish: {group.title}", reply_markup=admin_kbs.group_main_menu_keyboard(group_id))
     await state.set_state(AdminStates.group_menu)
 
 # --- Add Post ---
 @router.callback_query(F.data.startswith("add_post_"))
 async def start_add_post(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.edit_text("Send me the post content (Text, Photo, or Video).", reply_markup=admin_kbs.cancel_keyboard())
+    await callback.message.edit_text("Post mazmunini yuboring (Matn, Rasm yoki Video).", reply_markup=admin_kbs.cancel_keyboard())
     await state.set_state(AdminStates.waiting_for_post_content)
 
 @router.message(AdminStates.waiting_for_post_content)
@@ -95,7 +102,7 @@ async def receive_post_content(message: types.Message, state: FSMContext, sessio
         file_id = message.video.file_id
         caption = message.caption
     else:
-        await message.answer("Unsupported content type. Please send Text, Photo, or Video.")
+        await message.answer("Qollab-quvvatlanmagan kontent turi. Iltimos, Matn, Rasm yoki Video yuboring.")
         return
 
     post = Post(
@@ -109,7 +116,7 @@ async def receive_post_content(message: types.Message, state: FSMContext, sessio
     await session.commit()
     
     # Return to menu
-    await message.answer("Post added successfully!")
+    await message.answer("Post muvaffaqiyatli qo'shildi!")
     
     # We need to re-show the menu. 
     # Since we can't edit the user's message (this is a new message), just send a new menu.
@@ -117,13 +124,13 @@ async def receive_post_content(message: types.Message, state: FSMContext, sessio
     res = await session.execute(stmt)
     group = res.scalars().first()
     
-    await message.answer(f"Managing Group: {group.title}", reply_markup=admin_kbs.group_main_menu_keyboard(group_id))
+    await message.answer(f"Guruhni boshqarish: {group.title}", reply_markup=admin_kbs.group_main_menu_keyboard(group_id))
     await state.set_state(AdminStates.group_menu)
 
 # --- Add Schedule ---
 @router.callback_query(F.data.startswith("add_schedule_"))
 async def start_add_schedule(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.edit_text("Send me the time for the schedule (HH:MM format, e.g. 07:00, 18:30).", reply_markup=admin_kbs.cancel_keyboard())
+    await callback.message.edit_text("Jadval vaqtini yuboring (HH:MM formatida, masalan 07:00, 18:30).", reply_markup=admin_kbs.cancel_keyboard())
     await state.set_state(AdminStates.waiting_for_time)
 
 @router.message(AdminStates.waiting_for_time)
@@ -132,7 +139,7 @@ async def receive_schedule_time(message: types.Message, state: FSMContext, sessi
     time_str = message.text.strip()
     
     if not re.match(r"^\d{2}:\d{2}$", time_str):
-        await message.answer("Invalid format. Please use HH:MM (e.g. 14:30).")
+        await message.answer("Noto'g'ri format. Iltimos HH:MM ishlating (masalan 14:30).")
         return
         
     data = await state.get_data()
@@ -145,19 +152,19 @@ async def receive_schedule_time(message: types.Message, state: FSMContext, sessi
     session.add(schedule)
     await session.commit()
     
-    await message.answer(f"Schedule added for {time_str}!")
+    await message.answer(f"{time_str} ga jadval qo'shildi!")
     
     # Return to menu
     stmt = select(Group).where(Group.id == group_id)
     res = await session.execute(stmt)
     group = res.scalars().first()
-    await message.answer(f"Managing Group: {group.title}", reply_markup=admin_kbs.group_main_menu_keyboard(group_id))
+    await message.answer(f"Guruhni boshqarish: {group.title}", reply_markup=admin_kbs.group_main_menu_keyboard(group_id))
     await state.set_state(AdminStates.group_menu)
 
 # --- Add Keyword ---
 @router.callback_query(F.data.startswith("add_keyword_"))
 async def start_add_keyword(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.edit_text("Send me the forbidden keyword.", reply_markup=admin_kbs.cancel_keyboard())
+    await callback.message.edit_text("Taqiqlangan so'zni yuboring.", reply_markup=admin_kbs.cancel_keyboard())
     await state.set_state(AdminStates.waiting_for_keyword)
 
 @router.message(AdminStates.waiting_for_keyword)
@@ -174,20 +181,20 @@ async def receive_keyword(message: types.Message, state: FSMContext, session: As
     session.add(kw)
     await session.commit()
     
-    await message.answer(f"Keyword '{keyword_text}' added!")
+    await message.answer(f"'{keyword_text}' so'zi qo'shildi!")
     
     # Return to menu
     stmt = select(Group).where(Group.id == group_id)
     res = await session.execute(stmt)
     group = res.scalars().first()
-    await message.answer(f"Managing Group: {group.title}", reply_markup=admin_kbs.group_main_menu_keyboard(group_id))
+    await message.answer(f"Guruhni boshqarish: {group.title}", reply_markup=admin_kbs.group_main_menu_keyboard(group_id))
     await state.set_state(AdminStates.group_menu)
 
 # --- Cancel Action ---
 @router.callback_query(F.data == "cancel_action")
 async def cancel_handler(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
-    await callback.message.edit_text("Action canceled.")
+    await callback.message.edit_text("Amal bekor qilindi.")
 
 # --- View Posts ---
 @router.callback_query(F.data.startswith("view_posts_"))
@@ -199,10 +206,10 @@ async def view_posts(callback: types.CallbackQuery, session: AsyncSession):
     posts = res.scalars().all()
     
     if not posts:
-        await callback.message.answer("No posts found.")
+        await callback.message.answer("Postlar topilmadi.")
         return
 
-    text = "Posts:\n"
+    text = "Postlar:\n"
     for p in posts:
         text += f"ID: {p.id} | Type: {p.content_type}\n"
         if p.text: text += f"Text: {p.text[:20]}...\n"
@@ -222,11 +229,11 @@ async def delete_post(message: types.Message, session: AsyncSession):
         if post:
             await session.delete(post)
             await session.commit()
-            await message.answer(f"Post {post_id} deleted.")
+            await message.answer(f"Post {post_id} o'chirildi.")
         else:
-            await message.answer("Post not found.")
+            await message.answer("Post topilmadi.")
     except Exception:
-        await message.answer("Invalid command.")
+        await message.answer("Noto'g'ri buyruq.")
 
 # --- View Schedules ---
 @router.callback_query(F.data.startswith("view_schedules_"))
@@ -238,10 +245,10 @@ async def view_schedules(callback: types.CallbackQuery, session: AsyncSession):
     schedules = res.scalars().all()
     
     if not schedules:
-        await callback.message.answer("No schedules found.")
+        await callback.message.answer("Jadvallar topilmadi.")
         return
 
-    text = "Schedules:\n"
+    text = "Jadvallar:\n"
     for s in schedules:
         text += f"Time: {s.time} | /del_schedule_{s.id}\n"
     
@@ -258,11 +265,11 @@ async def delete_schedule(message: types.Message, session: AsyncSession):
         if schedule:
             await session.delete(schedule)
             await session.commit()
-            await message.answer(f"Schedule {schedule_id} deleted.")
+            await message.answer(f"Jadval {schedule_id} o'chirildi.")
         else:
-            await message.answer("Schedule not found.")
+            await message.answer("Jadval topilmadi.")
     except Exception:
-        await message.answer("Invalid command.")
+        await message.answer("Noto'g'ri buyruq.")
 
 # --- View Keywords ---
 @router.callback_query(F.data.startswith("view_keywords_"))
@@ -274,10 +281,10 @@ async def view_keywords(callback: types.CallbackQuery, session: AsyncSession):
     keywords = res.scalars().all()
     
     if not keywords:
-        await callback.message.answer("No keywords found.")
+        await callback.message.answer("Kalit so'zlar topilmadi.")
         return
 
-    text = "Keywords:\n"
+    text = "Kalit so'zlar:\n"
     for k in keywords:
         text += f"{k.word} | /del_keyword_{k.id}\n"
     
@@ -294,8 +301,85 @@ async def delete_keyword(message: types.Message, session: AsyncSession):
         if keyword:
             await session.delete(keyword)
             await session.commit()
-            await message.answer(f"Keyword {keyword_id} deleted.")
+            await message.answer(f"Kalit so'z {keyword_id} o'chirildi.")
         else:
-            await message.answer("Keyword not found.")
+            await message.answer("Kalit so'z topilmadi.")
     except Exception:
-        await message.answer("Invalid command.")
+        await message.answer("Noto'g'ri buyruq.")
+# --- Manual Channel Addition ---
+@router.callback_query(F.data == "manual_add_channel")
+async def start_manual_add_channel(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.edit_text(
+        "Kanalni qo'shish uchun uning Username (masalan @kanal_nomi) yoki ID sini (-100...) yuboring.\n"
+        "Muhim: Bot avval kanalga admin qilingan bo'lishi kerak!",
+        reply_markup=admin_kbs.cancel_keyboard()
+    )
+    await state.set_state(AdminStates.waiting_for_channel_id)
+
+@router.message(AdminStates.waiting_for_channel_id)
+async def process_manual_channel(message: types.Message, state: FSMContext, session: AsyncSession):
+    input_data = message.text.strip()
+    
+    # Try to resolve chat
+    try:
+        chat = await message.bot.get_chat(input_data)
+    except Exception:
+        await message.answer("Kanal topilmadi yoki bot u yerda yo'q. Iltimos tekshirib qaytadan yuboring.")
+        return
+
+    if chat.type != "channel" and chat.type != "supergroup":
+         await message.answer("Bu kanal yoki guruh emas.")
+         return
+         
+    # Check if bot is admin there (optional, but good practice)
+    # get_chat doesn't explicitly return 'is_admin' for the bot, but we can try get_chat_member
+    try:
+        member = await message.bot.get_chat_member(chat.id, message.bot.id)
+        if member.status not in ["administrator", "creator"]:
+             await message.answer("Bot kanalga admin qilinmagan. Iltimos avval botni admin qiling.")
+             return
+    except Exception:
+         # If we can't get member, we are probably not in the chat
+         await message.answer("Bot kanalga qo'shilmagan. Iltimos avval botni qo'shing.")
+         return
+
+    # User logic
+    user_stmt = select(User).where(User.telegram_id == message.from_user.id)
+    user_res = await session.execute(user_stmt)
+    user = user_res.scalars().first()
+    
+    if not user:
+        # Create user if missing (should be there if they used /start or /admin)
+        user = User(telegram_id=message.from_user.id, full_name=message.from_user.full_name)
+        session.add(user)
+        await session.flush()
+
+    # Create/Update Group/Channel
+    stmt_group = select(Group).where(Group.telegram_id == chat.id)
+    result_group = await session.execute(stmt_group)
+    group = result_group.scalars().first()
+
+    is_channel = 1 if chat.type == "channel" else 0
+
+    if not group:
+        group = Group(
+            telegram_id=chat.id,
+            title=chat.title,
+            is_channel=is_channel,
+            owner_id=user.id
+        )
+        session.add(group)
+        await message.answer(f"{chat.title} muvaffaqiyatli qo'shildi!")
+    else:
+        # Update owner to current user? Or just say it exists?
+        # Let's update owner to be safe if they are claiming it
+        group.owner_id = user.id
+        group.title = chat.title
+        group.is_channel = is_channel
+        await message.answer(f"{chat.title} ma'lumotlari yangilandi va sizga biriktirildi.")
+        
+    await session.commit()
+    await state.clear()
+    
+    # Show main menu
+    await cmd_admin(message, session, state)

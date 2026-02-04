@@ -23,7 +23,7 @@ async def cmd_start(message: types.Message, session: AsyncSession):
         session.add(user)
         # We need to commit here to save the user
         await session.commit()
-        await message.answer(f"Welcome, {message.from_user.full_name}! You have been registered.")
+        await message.answer(f"Xush kelibsiz, {message.from_user.full_name}! Siz ro'yxatdan o'tdingiz.")
     else:
         # Update info if changed
         if user.full_name != message.from_user.full_name or user.username != message.from_user.username:
@@ -31,4 +31,4 @@ async def cmd_start(message: types.Message, session: AsyncSession):
              user.username = message.from_user.username
              await session.commit()
         
-        await message.answer("Welcome back!")
+        await message.answer("Qaytganingizdan xursandmiz!")

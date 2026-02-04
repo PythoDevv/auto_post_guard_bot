@@ -5,3 +5,6 @@ apscheduler
 pandas
 openpyxl
 python-dotenv
+asyncpg
+psycopg2-binary
+pytz
