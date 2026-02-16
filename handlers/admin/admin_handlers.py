@@ -128,11 +128,33 @@ async def receive_post_content(message: types.Message, state: FSMContext, sessio
     session.add(post)
     await session.commit()
     
-    # Store post ID for scheduling
+    # Store post ID for naming
     await state.update_data(schedule_post_id=post.id)
     
-    await message.answer("Post muvaffaqiyatli qo'shildi!\nEndi ushbu post uchun aniq vaqtni belgilashingiz mumkin (HH:MM formatida). Yoki 'O'tkazib yuborish' tugmasini bosing.", reply_markup=admin_kbs.skip_keyboard())
-    # Reuse the specific schedule state
+    await message.answer("Post muvaffaqiyatli qo'shildi!\nEndi postga nom bering (masalan: Tandirchi, Non apparat). Yoki 'O'tkazib yuborish' tugmasini bosing.", reply_markup=admin_kbs.skip_name_keyboard())
+    await state.set_state(AdminStates.waiting_for_post_name)
+
+# --- Post Name ---
+@router.message(AdminStates.waiting_for_post_name)
+async def receive_post_name(message: types.Message, state: FSMContext, session: AsyncSession):
+    post_name = message.text.strip()
+    data = await state.get_data()
+    post_id = data.get("schedule_post_id")
+    
+    stmt = select(Post).where(Post.id == post_id)
+    res = await session.execute(stmt)
+    post = res.scalars().first()
+    
+    if post:
+        post.name = post_name
+        await session.commit()
+    
+    await message.answer(f"Post '{post_name}' deb nomlandi!\nEndi vaqtni belgilashingiz mumkin (HH:MM formatida). Yoki 'O'tkazib yuborish' tugmasini bosing.", reply_markup=admin_kbs.skip_keyboard())
+    await state.set_state(AdminStates.waiting_for_specific_schedule_time)
+
+@router.callback_query(F.data == "skip_post_name")
+async def skip_post_name(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.edit_text("Nom o'tkazib yuborildi.\nEndi vaqtni belgilashingiz mumkin (HH:MM formatida). Yoki 'O'tkazib yuborish' tugmasini bosing.", reply_markup=admin_kbs.skip_keyboard())
     await state.set_state(AdminStates.waiting_for_specific_schedule_time)
 
 # --- Add Schedule ---
@@ -236,7 +258,12 @@ async def view_posts(callback: types.CallbackQuery, session: AsyncSession):
         sched_res = await session.execute(sched_stmt)
         sched = sched_res.scalars().first()
         
-        btn_text = f"Post {p.id}"
+        # Show name if available, otherwise Post ID
+        if p.name:
+            btn_text = f"📌 {p.name}"
+        else:
+            btn_text = f"Post {p.id}"
+        
         if sched:
              btn_text += f" ({sched.time})"
         else:
@@ -538,7 +565,8 @@ async def manage_post(callback: types.CallbackQuery, session: AsyncSession):
     sched_res = await session.execute(sched_stmt)
     sched = sched_res.scalars().first()
     
-    info_text = f"Post ID: {post.id}\nTur: {post.content_type}\n"
+    post_name_display = post.name if post.name else f"Post {post.id}"
+    info_text = f"📌 Nom: {post_name_display}\nPost ID: {post.id}\nTur: {post.content_type}\n"
     if sched:
         type_str = "Doimiy" if sched.is_recurring else "Bir martalik"
         info_text += f"\nJadval: {sched.time} ({type_str})"
@@ -571,6 +599,10 @@ async def manage_post(callback: types.CallbackQuery, session: AsyncSession):
     # Actions keyboard
     from aiogram.utils.keyboard import InlineKeyboardBuilder
     builder = InlineKeyboardBuilder()
+    
+    builder.button(text="✏️ Nomni o'zgartirish", callback_data=f"edit_name_{post.id}")
+    builder.button(text="✏️ Mazmunni tahrirlash", callback_data=f"edit_content_{post.id}")
+    
     if not sched:
         builder.button(text="Jadval belgilash", callback_data=f"set_sched_btn_{post.id}")
     else:
@@ -623,3 +655,113 @@ async def btn_del_post(callback: types.CallbackQuery, session: AsyncSession):
         await callback.message.answer("Post o'chirildi.")
     else:
         await callback.answer("Topilmadi")
+
+# --- Edit Post Name ---
+@router.callback_query(F.data.startswith("edit_name_"))
+async def edit_post_name_start(callback: types.CallbackQuery, state: FSMContext):
+    post_id = int(callback.data.split("_")[2])
+    await state.update_data(edit_post_id=post_id)
+    await callback.message.answer("Yangi nomni yuboring:", reply_markup=admin_kbs.cancel_keyboard())
+    await state.set_state(AdminStates.waiting_for_edit_name)
+
+@router.message(AdminStates.waiting_for_edit_name)
+async def receive_edit_name(message: types.Message, state: FSMContext, session: AsyncSession):
+    new_name = message.text.strip()
+    data = await state.get_data()
+    post_id = data.get("edit_post_id")
+    
+    stmt = select(Post).where(Post.id == post_id)
+    res = await session.execute(stmt)
+    post = res.scalars().first()
+    
+    if not post:
+        await message.answer("Post topilmadi.")
+        await state.clear()
+        return
+    
+    post.name = new_name
+    await session.commit()
+    
+    await message.answer(f"Post nomi '{new_name}' ga o'zgartirildi!")
+    
+    # Return to group menu
+    group_stmt = select(Group).where(Group.id == post.group_id)
+    group_res = await session.execute(group_stmt)
+    group = group_res.scalars().first()
+    
+    if group:
+        await message.answer(f"Guruhni boshqarish: {group.title}", reply_markup=admin_kbs.group_main_menu_keyboard(group.id))
+        await state.set_state(AdminStates.group_menu)
+    else:
+        await state.clear()
+
+# --- Edit Post Content ---
+@router.callback_query(F.data.startswith("edit_content_"))
+async def edit_post_content_start(callback: types.CallbackQuery, state: FSMContext):
+    post_id = int(callback.data.split("_")[2])
+    await state.update_data(edit_post_id=post_id)
+    await callback.message.answer("Yangi mazmunni yuboring (Matn, Rasm yoki Video):", reply_markup=admin_kbs.cancel_keyboard())
+    await state.set_state(AdminStates.waiting_for_edit_content)
+
+@router.message(AdminStates.waiting_for_edit_content)
+async def receive_edit_content(message: types.Message, state: FSMContext, session: AsyncSession):
+    data = await state.get_data()
+    post_id = data.get("edit_post_id")
+    
+    stmt = select(Post).where(Post.id == post_id)
+    res = await session.execute(stmt)
+    post = res.scalars().first()
+    
+    if not post:
+        await message.answer("Post topilmadi.")
+        await state.clear()
+        return
+    
+    # Update content based on type
+    if message.text:
+        post.content_type = "text"
+        post.text = message.text
+        post.file_id = None
+        post.caption = None
+        if message.entities:
+            post.entities = json.dumps([e.model_dump(mode='json') for e in message.entities])
+        else:
+            post.entities = None
+    elif message.photo:
+        post.content_type = "photo"
+        post.file_id = message.photo[-1].file_id
+        post.caption = message.caption
+        post.text = None
+        if message.caption_entities:
+            post.entities = json.dumps([e.model_dump(mode='json') for e in message.caption_entities])
+        else:
+            post.entities = None
+    elif message.video:
+        post.content_type = "video"
+        post.file_id = message.video.file_id
+        post.caption = message.caption
+        post.text = None
+        if message.caption_entities:
+            post.entities = json.dumps([e.model_dump(mode='json') for e in message.caption_entities])
+        else:
+            post.entities = None
+    else:
+        await message.answer("Qollab-quvvatlanmagan kontent turi. Iltimos, Matn, Rasm yoki Video yuboring.")
+        return
+    
+    await session.commit()
+    
+    post_name = post.name if post.name else f"Post {post.id}"
+    await message.answer(f"'{post_name}' mazmuni muvaffaqiyatli yangilandi!")
+    
+    # Return to group menu
+    group_stmt = select(Group).where(Group.id == post.group_id)
+    group_res = await session.execute(group_stmt)
+    group = group_res.scalars().first()
+    
+    if group:
+        await message.answer(f"Guruhni boshqarish: {group.title}", reply_markup=admin_kbs.group_main_menu_keyboard(group.id))
+        await state.set_state(AdminStates.group_menu)
+    else:
+        await state.clear()
+
