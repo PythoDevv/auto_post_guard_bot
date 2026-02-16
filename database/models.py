@@ -31,6 +31,7 @@ class Post(Base):
     __tablename__ = 'posts'
     id = Column(Integer, primary_key=True)
     group_id = Column(Integer, ForeignKey('groups.id'))
+    name = Column(String, nullable=True)  # Custom post name (e.g. "Tandirchi")
     content_type = Column(String) # text, photo, video, etc.
     file_id = Column(String, nullable=True)
     caption = Column(Text, nullable=True)

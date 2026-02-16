@@ -14,6 +14,11 @@ class AdminStates(StatesGroup):
     waiting_for_schedule_type = State()
     waiting_for_specific_schedule_time = State()
     
+    # Post naming & editing
+    waiting_for_post_name = State()
+    waiting_for_edit_name = State()
+    waiting_for_edit_content = State()
+
     # Keyword management
     waiting_for_keyword = State()
     waiting_for_channel_id = State()

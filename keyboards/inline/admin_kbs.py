@@ -22,6 +22,11 @@ def skip_keyboard():
     builder.button(text="O'tkazib yuborish", callback_data="skip_schedule")
     return builder.as_markup()
 
+def skip_name_keyboard():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="O'tkazib yuborish", callback_data="skip_post_name")
+    return builder.as_markup()
+
 def group_main_menu_keyboard(group_id):
     builder = InlineKeyboardBuilder()
     builder.button(text="Post qo'shish", callback_data=f"add_post_{group_id}")
