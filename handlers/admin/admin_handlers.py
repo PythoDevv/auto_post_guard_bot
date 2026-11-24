@@ -1,3 +1,4 @@
+from typing import List, Optional
 from aiogram import Router, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -6,10 +7,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database.models import User, Group, Post, ScheduleTimes, Keyword
 from handlers.admin.states import AdminStates
 from keyboards.inline import admin_kbs
-import json
+from middlewares.album import AlbumMiddleware
+from services.posts import extract_post_content, media_count, send_post
 from config import ADMINS
 
 router = Router()
+# Albom (bir nechta rasm/video) bitta post bo'lib saqlanishi uchun
+router.message.middleware(AlbumMiddleware())
+
+POST_CONTENT_HINT = "Matn, Rasm, Video yoki Albom (bir nechta rasm/video birga)"
+UNSUPPORTED_CONTENT_MSG = (
+    "Qollab-quvvatlanmagan kontent turi. "
+    f"Iltimos, {POST_CONTENT_HINT} yuboring."
+)
 
 @router.message(Command("admin"))
 async def cmd_admin(message: types.Message, session: AsyncSession, state: FSMContext):
@@ -82,49 +92,25 @@ async def group_selected(callback: types.CallbackQuery, state: FSMContext, sessi
 # --- Add Post ---
 @router.callback_query(F.data.startswith("add_post_"))
 async def start_add_post(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.edit_text("Post mazmunini yuboring (Matn, Rasm yoki Video).", reply_markup=admin_kbs.cancel_keyboard())
+    await callback.message.edit_text(f"Post mazmunini yuboring ({POST_CONTENT_HINT}).", reply_markup=admin_kbs.cancel_keyboard())
     await state.set_state(AdminStates.waiting_for_post_content)
 
 @router.message(AdminStates.waiting_for_post_content)
-async def receive_post_content(message: types.Message, state: FSMContext, session: AsyncSession):
+async def receive_post_content(
+    message: types.Message,
+    state: FSMContext,
+    session: AsyncSession,
+    album: Optional[List[types.Message]] = None,
+):
     data = await state.get_data()
     group_id = data.get("selected_group_id")
-    
-    content_type = "text"
-    file_id = None
-    text = None
-    caption = None
-    entities = None
-    
-    if message.text:
-        content_type = "text"
-        text = message.text
-        if message.entities:
-            entities = json.dumps([e.model_dump(mode='json') for e in message.entities])
-    elif message.photo:
-        content_type = "photo"
-        file_id = message.photo[-1].file_id # Best quality
-        caption = message.caption
-        if message.caption_entities:
-            entities = json.dumps([e.model_dump(mode='json') for e in message.caption_entities])
-    elif message.video:
-        content_type = "video"
-        file_id = message.video.file_id
-        caption = message.caption
-        if message.caption_entities:
-            entities = json.dumps([e.model_dump(mode='json') for e in message.caption_entities])
-    else:
-        await message.answer("Qollab-quvvatlanmagan kontent turi. Iltimos, Matn, Rasm yoki Video yuboring.")
+
+    content = extract_post_content(message, album)
+    if not content:
+        await message.answer(UNSUPPORTED_CONTENT_MSG)
         return
 
-    post = Post(
-        group_id=group_id,
-        content_type=content_type,
-        file_id=file_id,
-        caption=caption,
-        text=text,
-        entities=entities
-    )
+    post = Post(group_id=group_id, **content)
     session.add(post)
     await session.commit()
     
@@ -566,7 +552,11 @@ async def manage_post(callback: types.CallbackQuery, session: AsyncSession):
     sched = sched_res.scalars().first()
     
     post_name_display = post.name if post.name else f"Post {post.id}"
-    info_text = f"📌 Nom: {post_name_display}\nPost ID: {post.id}\nTur: {post.content_type}\n"
+    if post.content_type == "media_group":
+        type_display = f"albom ({media_count(post)} ta media)"
+    else:
+        type_display = post.content_type
+    info_text = f"📌 Nom: {post_name_display}\nPost ID: {post.id}\nTur: {type_display}\n"
     if sched:
         type_str = "Doimiy" if sched.is_recurring else "Bir martalik"
         info_text += f"\nJadval: {sched.time} ({type_str})"
@@ -576,23 +566,8 @@ async def manage_post(callback: types.CallbackQuery, session: AsyncSession):
     # Send preview if possible (delete old menu msg first)
     await callback.message.delete()
     
-    # Load entities
-    entities = None
-    if post.entities:
-        try:
-            from aiogram.types import MessageEntity
-            data = json.loads(post.entities)
-            entities = [MessageEntity(**e) for e in data]
-        except:
-             pass
-
     try:
-        if post.content_type == 'text':
-            await callback.message.answer(post.text, entities=entities)
-        elif post.content_type == 'photo':
-            await callback.message.answer_photo(post.file_id, caption=post.caption, caption_entities=entities)
-        elif post.content_type == 'video':
-            await callback.message.answer_video(post.file_id, caption=post.caption, caption_entities=entities)
+        await send_post(callback.bot, callback.message.chat.id, post)
     except Exception as e:
         info_text += f"\n\n(Postni ko'rsatishda xatolik: {e})"
         
@@ -700,11 +675,16 @@ async def receive_edit_name(message: types.Message, state: FSMContext, session: 
 async def edit_post_content_start(callback: types.CallbackQuery, state: FSMContext):
     post_id = int(callback.data.split("_")[2])
     await state.update_data(edit_post_id=post_id)
-    await callback.message.answer("Yangi mazmunni yuboring (Matn, Rasm yoki Video):", reply_markup=admin_kbs.cancel_keyboard())
+    await callback.message.answer(f"Yangi mazmunni yuboring ({POST_CONTENT_HINT}):", reply_markup=admin_kbs.cancel_keyboard())
     await state.set_state(AdminStates.waiting_for_edit_content)
 
 @router.message(AdminStates.waiting_for_edit_content)
-async def receive_edit_content(message: types.Message, state: FSMContext, session: AsyncSession):
+async def receive_edit_content(
+    message: types.Message,
+    state: FSMContext,
+    session: AsyncSession,
+    album: Optional[List[types.Message]] = None,
+):
     data = await state.get_data()
     post_id = data.get("edit_post_id")
     
@@ -717,38 +697,14 @@ async def receive_edit_content(message: types.Message, state: FSMContext, sessio
         await state.clear()
         return
     
-    # Update content based on type
-    if message.text:
-        post.content_type = "text"
-        post.text = message.text
-        post.file_id = None
-        post.caption = None
-        if message.entities:
-            post.entities = json.dumps([e.model_dump(mode='json') for e in message.entities])
-        else:
-            post.entities = None
-    elif message.photo:
-        post.content_type = "photo"
-        post.file_id = message.photo[-1].file_id
-        post.caption = message.caption
-        post.text = None
-        if message.caption_entities:
-            post.entities = json.dumps([e.model_dump(mode='json') for e in message.caption_entities])
-        else:
-            post.entities = None
-    elif message.video:
-        post.content_type = "video"
-        post.file_id = message.video.file_id
-        post.caption = message.caption
-        post.text = None
-        if message.caption_entities:
-            post.entities = json.dumps([e.model_dump(mode='json') for e in message.caption_entities])
-        else:
-            post.entities = None
-    else:
-        await message.answer("Qollab-quvvatlanmagan kontent turi. Iltimos, Matn, Rasm yoki Video yuboring.")
+    content = extract_post_content(message, album)
+    if not content:
+        await message.answer(UNSUPPORTED_CONTENT_MSG)
         return
-    
+
+    for field, value in content.items():
+        setattr(post, field, value)
+
     await session.commit()
     
     post_name = post.name if post.name else f"Post {post.id}"

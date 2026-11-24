@@ -32,11 +32,12 @@ class Post(Base):
     id = Column(Integer, primary_key=True)
     group_id = Column(Integer, ForeignKey('groups.id'))
     name = Column(String, nullable=True)  # Custom post name (e.g. "Tandirchi")
-    content_type = Column(String) # text, photo, video, etc.
+    content_type = Column(String) # text, photo, video, media_group
     file_id = Column(String, nullable=True)
     caption = Column(Text, nullable=True)
     text = Column(Text, nullable=True)
     entities = Column(Text, nullable=True) # JSON stored as text
+    media = Column(Text, nullable=True) # media_group uchun JSON: [{"type": "video", "file_id": "..."}]
 
     group = relationship("Group", back_populates="posts")
 

@@ -25,4 +25,5 @@ async def init_db():
         await conn.execute(text("ALTER TABLE groups ADD COLUMN IF NOT EXISTS is_channel INTEGER DEFAULT 0;"))
         await conn.execute(text("ALTER TABLE schedule_times ADD COLUMN IF NOT EXISTS is_recurring INTEGER DEFAULT 1;"))
         await conn.execute(text("ALTER TABLE posts ADD COLUMN IF NOT EXISTS name VARCHAR;"))
+        await conn.execute(text("ALTER TABLE posts ADD COLUMN IF NOT EXISTS media TEXT;"))
         await conn.commit()

@@ -1,6 +1,3 @@
-import asyncio
-import random
-import json
 from datetime import datetime
 import pytz
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -8,6 +5,7 @@ from aiogram import Bot
 from sqlalchemy import select
 from database.engine import AsyncSessionLocal
 from database.models import ScheduleTimes, Group, Post
+from services.posts import send_post
 
 scheduler = AsyncIOScheduler(timezone="Asia/Tashkent")
 
@@ -60,45 +58,9 @@ async def check_scheduled_posts(bot: Bot):
             if not post_to_send:
                 continue
 
-            # Load entities
-            entities = None
-            if post_to_send.entities:
-                try:
-                    entities = json.loads(post_to_send.entities)
-                    # Aiogram 3 expects list of objects or similar?
-                    # send_message(entities=...) expects list of MessageEntity
-                    # We need to re-hydrate them into types.MessageEntity if aiogram strictness requires it.
-                    # Actually json dicts usually work if pydantic validates, but usually passing list of dicts can work or fail.
-                    # Best to re-instantiate.
-                    from aiogram.types import MessageEntity
-                    entities = [MessageEntity(**e) for e in entities]
-                except Exception as e:
-                    print(f"Error parsing entities: {e}")
-                    entities = None
-
             try:
-                if post_to_send.content_type == 'text':
-                    await bot.send_message(
-                        chat_id=group.telegram_id,
-                        text=post_to_send.text,
-                        entities=entities
-                    )
-                elif post_to_send.content_type == 'photo':
-                    await bot.send_photo(
-                        chat_id=group.telegram_id,
-                        photo=post_to_send.file_id,
-                        caption=post_to_send.caption,
-                        caption_entities=entities
-                    )
-                elif post_to_send.content_type == 'video':
-                    await bot.send_video(
-                        chat_id=group.telegram_id,
-                        video=post_to_send.file_id,
-                        caption=post_to_send.caption,
-                        caption_entities=entities
-                    )
-                # Add more types as needed
-                
+                await send_post(bot, group.telegram_id, post_to_send)
+
                 # If not recurring, delete schedule
                 if schedule.is_recurring == 0:
                    await session.delete(schedule)
